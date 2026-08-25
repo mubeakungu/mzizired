@@ -1,0 +1,143 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: mzizibet-postgres
+    environment:
+      POSTGRES_USER: mzizibet_user
+      POSTGRES_PASSWORD: secure_password_change_this
+      POSTGRES_DB: mzizibet
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mzizibet_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mzizibet-network
+
+  # Redis (for caching, optional)
+  redis:
+    image: redis:7-alpine
+    container_name: mzizibet-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mzizibet-network
+
+  # Mzizibet Flask Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mzizibet-app
+    environment:
+      # Flask
+      FLASK_ENV: development
+      FLASK_DEBUG: 'True'
+      SECRET_KEY: dev-secret-key-change-in-production
+      
+      # Database
+      DATABASE_URL: postgresql://mzizibet_user:secure_password_change_this@postgres:5432/mzizibet
+      
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+      
+      # M-Pesa (use sandbox credentials for testing)
+      MPESA_CONSUMER_KEY: your_sandbox_key
+      MPESA_CONSUMER_SECRET: your_sandbox_secret
+      MPESA_SHORTCODE: 174379
+      MPESA_PASSKEY: bfb279f9aa9bdbcf158e97dd1a503b41
+      MPESA_ENVIRONMENT: sandbox
+      MPESA_CALLBACK_URL: http://localhost:5000/api/mpesa/callback
+      
+      # URLs
+      API_BASE_URL: http://localhost:5000
+      FRONTEND_URL: http://localhost:5173
+      
+      # Email (can use local dummy for dev)
+      MAIL_SERVER: smtp.gmail.com
+      MAIL_PORT: 587
+      MAIL_USE_TLS: 'True'
+      MAIL_USERNAME: your_email@gmail.com
+      MAIL_PASSWORD: your_app_password
+      
+      # Admin
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin123
+    
+    ports:
+      - "5000:8000"
+    
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    
+    volumes:
+      - .:/app
+      - /app/venv
+    
+    networks:
+      - mzizibet-network
+    
+    command: >
+      sh -c "
+        echo 'Waiting for database...' &&
+        sleep 5 &&
+        flask db upgrade &&
+        python run.py
+      "
+
+  # Frontend (React + Vite, optional)
+  frontend:
+    image: node:20-alpine
+    container_name: mzizibet-frontend
+    working_dir: /app/rebrand
+    environment:
+      VITE_API_BASE_URL: http://localhost:5000
+      VITE_WEBSOCKET_URL: ws://localhost:5000
+    volumes:
+      - ./rebrand:/app/rebrand
+      - /app/rebrand/node_modules
+    ports:
+      - "5173:5173"
+    networks:
+      - mzizibet-network
+    command: npm run dev
+
+  # Nginx Reverse Proxy (optional, for production-like setup)
+  nginx:
+    image: nginx:alpine
+    container_name: mzizibet-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app
+      - frontend
+    networks:
+      - mzizibet-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  mzizibet-network:
+    driver: bridge
